@@ -26,11 +26,15 @@ function startAnimation() {
     let colorDirection = 1;
 
     const settings = {
-       morphTime: 2000,
-        shapeTime: 6000,
-        rotationSpeed: 0.00,
-        sphereRadius: 1.2,
+        outerRadius: 2, 
+        outerScale: 0.03,
         pointSize: 0.03,
+        nucleusColor1: '#FF0D92',
+        nucleusColor2: '#0D92F4',
+        morphTime: 2000,
+        shapeTime: 6000,
+        rotationSpeed: 0.003,
+        sphereRadius: 1.2,
         color1: '#FF0D92',
         color2: '#0D92F4',
         blobFrequency: 0.3,
@@ -43,7 +47,10 @@ function startAnimation() {
         glowColor1: '#FF0D92',
         glowColor2: '#0D92F4',
         colorChangeSpeed: 0.05,
-        initialShapeTime: 3500 
+        initialShapeTime: 3500,
+        numberOfLines: 15,
+        lineLifespan: { min: 3000, max: 5000 },
+        lineOpacity: 0.3,
     };
 
     const noise = new SimplexNoise();
@@ -58,6 +65,7 @@ function startAnimation() {
         createCylinderPoints,
         createSpherePoints,
         createTorusPoints,
+        createSpherePoints,
         createPyramidPoints
     ];
     let shapeIndex = 0;
@@ -69,25 +77,26 @@ function startAnimation() {
 
     function init() {
         scene = new THREE.Scene();
-
+    
         camera = new THREE.PerspectiveCamera(75, 350 / 350, 0.1, 1000);
         camera.position.z = 2.7;
-
+    
         renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(350, 350);
         renderer.setPixelRatio(window.devicePixelRatio || 1);
         renderer.setClearColor(0x000000);
         document.querySelector('.nucleus-animation').appendChild(renderer.domElement);
-
+    
         currentObject = shapes[0](settings);
         scene.add(currentObject);
-
+        scene.add(currentObject.lines); // Add lines to the scene
+    
         innerGlow = createGlow(settings.glowSize, settings.glowColor1, settings.glowColor2);
         scene.add(innerGlow);
-
+    
         animate();
         scheduleNextShape();
-
+    
         window.addEventListener('resize', onWindowResize);
     }
 
@@ -113,21 +122,27 @@ function startAnimation() {
         morphing = true;
         const nextShape = shapes[shapeIndex](settings);
         nextObject = nextShape;
+        if (currentObject) {
+            nextObject.rotation.y = currentObject.rotation.y - settings.rotationSpeed * 1999;
+        }
         morphProgress = 0;
-
+    
         function morphStep() {
             morphProgress += settings.morphStepSize;
             const easedProgress = easeInOutQuad(morphProgress);
-
+    
             if (morphProgress >= 1) {
                 scene.remove(currentObject);
+                scene.remove(currentObject.lines); // Remove old lines
                 currentObject = nextObject;
                 scene.add(currentObject);
+                scene.add(currentObject.lines); // Add new lines
                 morphing = false;
                 scheduleNextShape();
                 return;
             }
             interpolateGeometry(currentObject.geometry, nextObject.geometry, easedProgress);
+            interpolateGeometry(currentObject.lines.geometry, nextObject.lines.geometry, easedProgress); // Interpolate lines
             requestAnimationFrame(morphStep);
         }
         morphStep();
@@ -182,31 +197,35 @@ function startAnimation() {
 
     function animate() {
         requestAnimationFrame(animate);
-
+        const time = Date.now() * 0.001;
         if (currentObject) {
-            applyBlobEffect(currentObject.geometry, performance.now() / 1000);
             currentObject.rotation.y += settings.rotationSpeed;
-            currentObject.rotation.x += settings.rotationSpeed;
-            currentObject.rotation.z += settings.rotationSpeed;
+    
+            if (currentObject.isSphere) {
+                const pulseScale = 1 + Math.sin(time * 2) * 0.1;
+                currentObject.material.size = settings.pointSize * pulseScale;
+    
+                applyBlobEffect(currentObject.geometry, time);
+                applyBlobEffect(currentObject.lines.geometry, time); 
+            }
         }
-
+    
         colorChangeProgress += settings.colorChangeSpeed * colorDirection;
         if (colorChangeProgress > 1 || colorChangeProgress < 0) {
             colorDirection *= -1;
             colorChangeProgress = Math.max(0, Math.min(1, colorChangeProgress));
         }
-
+    
         const interpolatedGlowColor = new THREE.Color().lerpColors(
             new THREE.Color(settings.glowColor1),
             new THREE.Color(settings.glowColor2),
             colorChangeProgress
         );
-
+    
         innerGlow.material.uniforms.glowColor1.value.copy(interpolatedGlowColor);
         innerGlow.material.uniforms.glowColor2.value.copy(interpolatedGlowColor);
-
         updateGlowVertices(innerGlow, settings.glowSize, settings.glowScale);
-
+    
         renderer.render(scene, camera);
     }
 
@@ -217,15 +236,15 @@ function startAnimation() {
             const x = positions[i];
             const y = positions[i + 1];
             const z = positions[i + 2];
-
+    
             const vertex = new THREE.Vector3(x, y, z);
             const distance = vertex.distanceTo(center);
-
+    
             const amplitude =
                 settings.blobAmplitude *
                 settings.blobScale *
                 (1 - Math.abs(distance - settings.sphereRadius) / settings.sphereRadius);
-
+    
             const offset = noise.noise3D(
                 x * settings.blobFrequency,
                 y * settings.blobFrequency,
@@ -240,7 +259,9 @@ function startAnimation() {
 
     function createSpherePoints({ sphereRadius, pointSize, color1, color2 }) {
         const geometry = new THREE.SphereGeometry(sphereRadius, 64, 64);
-        return createPoints(geometry, pointSize, color1, color2);
+        const points = createPoints(geometry, pointSize, color1, color2);
+        points.isSphere = true;
+        return points;
     }
 
     function createCubePoints({ sphereRadius, pointSize, color1, color2 }) {
@@ -249,23 +270,181 @@ function startAnimation() {
 
         return createPoints(geometry, pointSize, color1, color2);
     }
+    function createNucleus() {
+        const segments = 100;
+        const radius = settings.outerRadius;
+        const pointSize = settings.pointSize;
+        const color1 = settings.nucleusColor1; 
+        const color2 = settings.nucleusColor2;
+        const nucleusGeometry = new THREE.SphereGeometry(radius, segments, segments);
+        const pointMaterial = new THREE.PointsMaterial({
+            vertexColors: true,
+            size: pointSize
+        });
 
-    function createConePoints({ sphereRadius, pointSize, color1, color2 }) {
-        const height = sphereRadius * 1.7;
-        const radius = sphereRadius;
-        const geometry = new THREE.ConeGeometry(radius, height, 64, 10, true);
-        return createPoints(geometry, pointSize, color1, color2);
+        const nucleus = new THREE.Points(nucleusGeometry, pointMaterial);
+
+        const colors = [];
+        const colorA = new THREE.Color(color1);
+        const colorB = new THREE.Color(color2);
+
+        for (let i = 0; i < nucleusGeometry.attributes.position.count; i++) {
+            const t = i / nucleusGeometry.attributes.position.count;
+            const interpolatedColor = colorA.clone().lerp(colorB, t);
+            colors.push(interpolatedColor.r, interpolatedColor.g, interpolatedColor.b);
+        }
+
+        nucleusGeometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+        return nucleus;
     }
-    function createPyramidPoints({ sphereRadius, pointSize, color1, color2 }) {
-      const geometry = new THREE.ConeGeometry(sphereRadius, sphereRadius * 2, 3, 1); // 4 sides for the pyramid
-    
+    function createConePoints({ sphereRadius, pointSize, color1, color2 }) {
+      const height = sphereRadius * 1.7;
+      const radius = sphereRadius;
+      const segments = 64;
+      const heightSegments = 30;
+      const positions = [];
+      for (let i = 0; i <= heightSegments; i++) {
+          const y = (i / heightSegments) * height - height/2;
+          const currentRadius = radius * (1 - i / heightSegments);
+          
+          for (let j = 0; j <= segments; j++) {
+              const theta = (j / segments) * Math.PI * 2;
+              const x = currentRadius * Math.sin(theta);
+              const z = currentRadius * Math.cos(theta);
+              positions.push(x, y, z);
+          }
+      }
+      for (let i = 0; i <= segments/2; i++) {
+          for (let j = 0; j <= segments; j++) {
+              const r = (i / (segments/2)) * radius;
+              const theta = (j / segments) * Math.PI * 2;
+              const x = r * Math.sin(theta);
+              const z = r * Math.cos(theta);
+              positions.push(x, -height/2, z);
+          }
+      }
+      
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
       return createPoints(geometry, pointSize, color1, color2);
+  }
+
+    function createPyramidPoints({ sphereRadius, pointSize, color1, color2 }) {
+        const baseSize = sphereRadius * 1.5;
+        const height = sphereRadius * 2;
+        
+        const pyramidGeometry = new THREE.BufferGeometry();
+        
+        const vertices = new Float32Array([
+            // Base (square)
+            -baseSize/2, -height/2, -baseSize/2,
+            baseSize/2, -height/2, -baseSize/2,
+            baseSize/2, -height/2, baseSize/2,
+            -baseSize/2, -height/2, baseSize/2,
+            0, height/2, 0
+        ]);
+        
+        const indices = new Uint16Array([
+            0, 1, 2,
+            0, 2, 3,
+            0, 4, 1,
+            1, 4, 2,
+            2, 4, 3,
+            3, 4, 0 
+        ]);
+      
+        const tempGeometry = new THREE.BufferGeometry();
+        tempGeometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+        tempGeometry.setIndex(new THREE.BufferAttribute(indices, 1));
+        
+        const subdivided = new THREE.BufferGeometry();
+        const positions = [];
+        
+        function addPointsAlongEdge(start, end, segments) {
+            for (let i = 0; i <= segments; i++) {
+                const t = i / segments;
+                positions.push(
+                    start.x + (end.x - start.x) * t,
+                    start.y + (end.y - start.y) * t,
+                    start.z + (end.z - start.z) * t
+                );
+            }
+        }
+        
+
+        const segments = 40;
+        
+
+        for (let i = 0; i < indices.length; i += 3) {
+            const v1 = new THREE.Vector3(
+                vertices[indices[i] * 3],
+                vertices[indices[i] * 3 + 1],
+                vertices[indices[i] * 3 + 2]
+            );
+            const v2 = new THREE.Vector3(
+                vertices[indices[i + 1] * 3],
+                vertices[indices[i + 1] * 3 + 1],
+                vertices[indices[i + 1] * 3 + 2]
+            );
+            const v3 = new THREE.Vector3(
+                vertices[indices[i + 2] * 3],
+                vertices[indices[i + 2] * 3 + 1],
+                vertices[indices[i + 2] * 3 + 2]
+            );
+            
+
+            for (let j = 0; j <= segments; j++) {
+                const jt = j / segments;
+                for (let k = 0; k <= segments - j; k++) {
+                    const kt = k / segments;
+                    const t1 = 1 - jt - kt;
+                    
+                    if (t1 >= 0) {
+                        positions.push(
+                            v1.x * t1 + v2.x * jt + v3.x * kt,
+                            v1.y * t1 + v2.y * jt + v3.y * kt,
+                            v1.z * t1 + v2.z * jt + v3.z * kt
+                        );
+                    }
+                }
+            }
+        }
+        
+        subdivided.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+        
+        return createPoints(subdivided, pointSize, color1, color2);
     }
 
     function createCylinderPoints({ sphereRadius, pointSize, color1, color2 }) {
         const height = sphereRadius * 1.1;
         const radius = sphereRadius;
-        const geometry = new THREE.CylinderGeometry(radius, radius, height, 64, 64, false);
+        const segments = 45;
+        const heightSegments = 40;
+        const positions = [];
+        for (let i = 0; i <= heightSegments; i++) {
+            const y = (i / heightSegments) * height - height/2;
+            
+            for (let j = 0; j <= segments; j++) {
+                const theta = (j / segments) * Math.PI * 2;
+                const x = radius * Math.sin(theta);
+                const z = radius * Math.cos(theta);
+                positions.push(x, y, z);
+            }
+        }
+        for (let cap = 0; cap < 2; cap++) {
+            const y = cap === 0 ? -height/2 : height/2;
+            for (let i = 0; i <= segments/2; i++) {
+                for (let j = 0; j <= segments; j++) {
+                    const r = (i / (segments/2)) * radius;
+                    const theta = (j / segments) * Math.PI * 2;
+                    const x = r * Math.sin(theta);
+                    const z = r * Math.cos(theta);
+                    positions.push(x, y, z);
+                }
+            }
+        }    
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
         return createPoints(geometry, pointSize, color1, color2);
     }
 
@@ -276,23 +455,71 @@ function startAnimation() {
         return createPoints(geometry, pointSize, color1, color2);
     }
 
+    function createLinesBetweenPoints(geometry, maxDistance) {
+        const positions = geometry.attributes.position.array;
+        const linePositions = [];
+        const lineColors = [];
     
+        for (let i = 0; i < positions.length; i += 3) {
+            const x1 = positions[i];
+            const y1 = positions[i + 1];
+            const z1 = positions[i + 2];
+    
+            for (let j = i + 3; j < positions.length; j += 3) {
+                const x2 = positions[j];
+                const y2 = positions[j + 1];
+                const z2 = positions[j + 2];
+    
+                const distance = Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2 + (z2 - z1) ** 2);
+    
+                if (distance < maxDistance) {
+                    linePositions.push(x1, y1, z1, x2, y2, z2);
+    
+                    // Interpolate colors between the two points
+                    const t = distance / maxDistance;
+                    const color1 = new THREE.Color().fromArray(geometry.attributes.color.array, i);
+                    const color2 = new THREE.Color().fromArray(geometry.attributes.color.array, j);
+                    const interpolatedColor = color1.clone().lerp(color2, t);
+    
+                    lineColors.push(interpolatedColor.r, interpolatedColor.g, interpolatedColor.b);
+                    lineColors.push(interpolatedColor.r, interpolatedColor.g, interpolatedColor.b);
+                }
+            }
+        }
+    
+        const lineGeometry = new THREE.BufferGeometry();
+        lineGeometry.setAttribute('position', new THREE.Float32BufferAttribute(linePositions, 3));
+        lineGeometry.setAttribute('color', new THREE.Float32BufferAttribute(lineColors, 3));
+    
+        const lineMaterial = new THREE.LineBasicMaterial({
+            vertexColors: true,
+            transparent: true,
+            opacity: 0.5,
+        });
+    
+        return new THREE.LineSegments(lineGeometry, lineMaterial);
+    }
   
-    function createPoints(geometry, pointSize, color1, color2) {
+    function createPoints(geometry, pointSize, color1, color2, maxDistance = 0.3) {
         const material = new THREE.PointsMaterial({ size: pointSize, vertexColors: true });
         const points = new THREE.Points(geometry, material);
-
+    
         const colors = [];
         const colorA = new THREE.Color(color1);
         const colorB = new THREE.Color(color2);
-
+    
         for (let i = 0; i < geometry.attributes.position.count; i++) {
             const t = i / geometry.attributes.position.count;
             const color = colorA.clone().lerp(colorB, t);
             colors.push(color.r, color.g, color.b);
         }
-
+    
         geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+    
+        // Create lines between nearby points
+        const lines = createLinesBetweenPoints(geometry, maxDistance);
+        points.lines = lines; // Store lines for easy access
+    
         return points;
     }
 
